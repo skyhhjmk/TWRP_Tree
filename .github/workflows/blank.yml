@@ -39,6 +39,7 @@ jobs:
     
     - name: Download boot or recovery img
       run: |
+        rm *.bin *.img
         wget ${{ github.event.inputs.IMG_URL }}
         ls
       
