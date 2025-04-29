@@ -39,9 +39,9 @@ jobs:
     
     - name: Download boot or recovery img
       run: |
-        rm *.bin | echo no bin =(
-        rm *.img | echo no img =(
-        echo download!
+        rm *.bin || echo no bin XD
+        rm *.img || echo no img XD
+        echo download
         wget ${{ github.event.inputs.IMG_URL }}
         ls
       
