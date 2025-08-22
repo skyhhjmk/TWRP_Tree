@@ -2,7 +2,9 @@
 - 这个工具怎么用？
 - 1.首先你要搞到你的设备任意一个可以开机系统的
 - boot.img AB分区 
-- recovery.img 除了AB分区以外的所有分区 
+- recovery.img 除了AB分区以外的所有分区
+
+注意，如果你发觉boot分区有点小（特别是存在init_boot分区的机器），那么应该尝试使用vendor_boot而不是boot，因为此时的boot分区中可能不包含生成TWRP Device Tree所需的文件，在我的实操中，boot分区的大小在67MB左右，提取镜像后的大小是64MiB，而vendor_boot的大小在101MB左右，提取镜像后在96MiB
 
 -----
 
