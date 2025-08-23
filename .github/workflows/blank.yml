@@ -14,77 +14,66 @@ jobs:
       - name: Check Out
         uses: actions/checkout@v4
 
-      - name: Setup Environment
+      - name: Setup Android NDK
         run: |
-          sudo apt update -qq
-          sudo apt install -y python3 cpio lz4 unzip wget git build-essential zlib1g-dev
-          # 安全创建 Python 符号链接
-          if [ ! -L /usr/bin/python ]; then
-            sudo ln -s /usr/bin/python3 /usr/bin/python
-          else
-            echo "Python symlink exists"
-          fi
+          wget https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
+          unzip android-ndk-r25b-linux.zip -d $HOME
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r25b" >> $GITHUB_ENV
 
       - name: Build Magiskboot from Source
         run: |
-          # 安装 NDK（Magisk 编译依赖）
-          wget https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
-          unzip -q android-ndk-r25b-linux.zip
-          export ANDROID_NDK_HOME=$(pwd)/android-ndk-r25b
-          
-          # 克隆官方仓库（修正命令）
           git clone --depth=1 https://github.com/topjohnwu/Magisk.git
           cd Magisk
-          
-          # 编译 magiskboot
-          ./build.py magiskboot
-          
-          # 将编译好的 magiskboot 移动到系统路径
-          sudo mv out/magiskboot /usr/local/bin/
-          magiskboot --version  # 验证安装
+          export ANDROID_NDK_HOME=$HOME/android-ndk-r25b
+          ./build.py native  # 修复：使用 native 参数
 
-      - name: Download and Extract Boot Image
+      - name: Copy Magiskboot Binary
+        run: |
+          cp Magisk/native/out/magiskboot .  # 复制编译好的二进制文件
+          chmod +x magiskboot
+
+      - name: Download initboot.img
         run: |
           wget -O initboot.img "${{ github.event.inputs.IMGURL }}"
-          magiskboot unpack initboot.img
-          mkdir -p dt
-          cp -r ramdisk/* dt/
 
-      - name: Process Nested CPIO Archives
+      - name: Extract Ramdisk
         run: |
-          find dt -name "*.cpio" -exec sh -c '
-            dir=$(dirname "$1")
-            base=$(basename "$1" .cpio)
-            mkdir -p "$dir/$base"
-            cd "$dir/$base"
-            cpio -i < "../$base.cpio"
-            rm "../$base.cpio"
-          ' sh {} \;
+          ./magiskboot unpack initboot.img
+          mkdir ramdisk
+          cd ramdisk
+          cpio -idv < ../ramdisk.cpio
 
-      - name: Upload Artifacts
+      - name: Create DeviceTree
         run: |
-          zip -r DeviceTree.zip dt/
-          ls -lh DeviceTree.zip
+          # 创建设备树文件
+          mkdir -p device_tree
+          cd ramdisk
+          find . -type f -name "*.fstab*" -exec cp --parents {} ../device_tree \;
+          find . -type f -name "*.rc" -exec cp --parents {} ../device_tree \;
+          cp -r fstab* ../device_tree/ 2>/dev/null || true
+          cp -r etc ../device_tree/ 2>/dev/null || true
+
+      - name: Create DeviceTree ZIP
+        run: |
+          cd device_tree
+          zip -r ../DeviceTree.zip .
+          cd ..
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
-          name: TWRP-DeviceTree-Android15
-          path: |
-            DeviceTree.zip
-            recovery/root/cpio.log
-          retention-days: 3
+          name: DeviceTree
+          path: DeviceTree.zip
 
       - name: Create Release
-        if: success()
         uses: softprops/action-gh-release@v1
         with:
-          files: DeviceTree.zip
           tag_name: android15-${{ github.run_id }}
           body: |
             Auto-generated TWRP device tree for Android 15
             Source: ${{ github.event.inputs.IMGURL }}
             Magiskboot: Compiled from source
             Build date: $(date "+%Y-%m-%d %H:%M:%S")
+          files: DeviceTree.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
