@@ -30,7 +30,7 @@ jobs:
 
     - name: Clone Magisk
       run: |
-        git clone https://github.com/topjohnwu/Magisk.git --depth=1
+        git clone https://github.com/topjohnwu/Magisk.git
         cd Magisk
         git submodule update --init --recursive
 
@@ -38,48 +38,59 @@ jobs:
       working-directory: Magisk
       run: |
         python3 build.py ndk
-        echo "NDK installed successfully"
-        ls -la ndk/
+        echo "NDK installation directory:"
+        ls -la
+        if [ -d "ndk" ]; then
+          echo "NDK found in Magisk/ndk"
+          echo "ANDROID_NDK_HOME=$PWD/ndk" >> $GITHUB_ENV
+        else
+          echo "NDK directory not found in Magisk"
+          # 尝试在父目录查找
+          if [ -d "../ndk" ]; then
+            echo "NDK found in parent directory"
+            echo "ANDROID_NDK_HOME=$PWD/../ndk" >> $GITHUB_ENV
+          else
+            echo "NDK directory not found anywhere"
+            exit 1
+          fi
+        fi
 
-    - name: Build Magisk (all components)
+    - name: Build Magisk
       working-directory: Magisk
       run: |
-        export ANDROID_NDK_HOME=$PWD/ndk
-        echo "Building all Magisk components..."
-        python3 build.py all
-        echo "Build completed. Checking output..."
+        echo "Building Magisk..."
+        python3 build.py native
+        echo "Build completed. Checking output directory:"
         ls -la native/out/
-        echo "Checking for magiskboot..."
+        echo "Searching for magiskboot binary:"
         find . -name "magiskboot" -type f
 
     - name: Copy magiskboot
       run: |
-        echo "Searching for magiskboot binary..."
-        find Magisk -name "magiskboot" -type f
-        MAGISKBOOT_PATH=$(find Magisk -name "magiskboot" -type f | head -n 1)
-        if [ -z "$MAGISKBOOT_PATH" ]; then
-          echo "ERROR: magiskboot not found!"
+        echo "Searching for magiskboot in Magisk directory..."
+        find Magisk -name "magiskboot" -type f -exec cp {} . \;
+        if [ -f "magiskboot" ]; then
+          echo "magiskboot copied successfully"
+          file magiskboot
+        else
+          echo "ERROR: magiskboot not found"
           exit 1
         fi
-        echo "Found magiskboot at: $MAGISKBOOT_PATH"
-        cp "$MAGISKBOOT_PATH" .
-        echo "Copied magiskboot to current directory"
-        ls -la magiskboot
 
     - name: Extract device tree
       run: |
         echo "Extracting device tree from initboot.img..."
         ./magiskboot unpack initboot.img
-        echo "Unpacked contents:"
+        echo "Unpacked files:"
         ls -la
         if [ -f "kernel_dtb" ]; then
-          echo "Found kernel_dtb, renaming to devicetree.dtb"
+          echo "Found kernel_dtb"
           mv kernel_dtb devicetree.dtb
         elif [ -f "dtb" ]; then
-          echo "Found dtb, renaming to devicetree.dtb"
+          echo "Found dtb"
           mv dtb devicetree.dtb
         else
-          echo "ERROR: No device tree file found!"
+          echo "ERROR: No device tree file found"
           exit 1
         fi
         echo "Device tree extracted successfully"
@@ -88,10 +99,17 @@ jobs:
     - name: Repack initboot.img
       run: |
         echo "Repacking initboot.img with extracted device tree..."
-        ./magiskboot repack initboot.img newinitboot.img
-        echo "Repack completed"
-        ls -la newinitboot.img
-        file newinitboot.img
+        ./magiskboot repack initboot.img
+        echo "Repacked files:"
+        ls -la
+        if [ -f "new-boot.img" ]; then
+          mv new-boot.img newinitboot.img
+          echo "Repacked image saved as newinitboot.img"
+          file newinitboot.img
+        else
+          echo "ERROR: Repacked image not found"
+          exit 1
+        fi
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -105,9 +123,8 @@ jobs:
     - name: Generate build report
       run: |
         echo "## Build Report" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Date**: $(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Status**: Success" >> $GITHUB_STEP_SUMMARY
         echo "- **Device Tree**: devicetree.dtb" >> $GITHUB_STEP_SUMMARY
         echo "- **Repacked Image**: newinitboot.img" >> $GITHUB_STEP_SUMMARY
-        echo "- **Screen Resolution**: 1272x2800" >> $GITHUB_STEP_SUMMARY
-        echo "- **Display Density**: 560" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Status**: Succe
+        echo "- **Build Date**: $(date "+%Y-%m-%d %H:%M:%S")" >> $GITHUB_STEP_SUMMARY
+        echo "- **Source**: Compiled from source" >> $GITHUB_STEP_SUMMARY
