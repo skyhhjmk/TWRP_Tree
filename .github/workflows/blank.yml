@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     
     steps:
     - name: Checkout repository
@@ -22,97 +22,92 @@ jobs:
         echo "Downloaded initboot.img:"
         file initboot.img
 
-    - name: Cache NDK
-      id: cache-ndk
-      uses: actions/cache@v4
-      with:
-        path: android-ndk-r25b
-        key: ndk-r25b-${{ runner.os }}-${{ hashFiles('Magisk/build.py') }}
-        restore-keys: ndk-r25b-${{ runner.os }}-
-
-    - name: Install NDK
-      if: steps.cache-ndk.outputs.cache-hit != 'true'
+    - name: Install dependencies
       run: |
-        curl -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
-        unzip -q ndk.zip
-        rm ndk.zip
+        sudo apt-get update
+        sudo apt-get install -y git wget unzip python3 python3-pip cpio
+        pip3 install requests
 
     - name: Clone Magisk
-      run: git clone https://github.com/topjohnwu/Magisk.git --recurse-submodules
-
-    - name: Initialize submodules
-      working-directory: Magisk
-      run: git submodule update --init --recursive
-
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
-
-    - name: Build Magiskboot
-      working-directory: Magisk
-      env:
-        ANDROID_NDK_HOME: ${{ github.workspace }}/android-ndk-r25b
-        NDK: ${{ github.workspace }}/android-ndk-r25b
       run: |
+        git clone --recurse-submodules https://github.com/topjohnwu/Magisk.git
+        cd Magisk
+        git checkout $(git describe --tags `git rev-list --tags --max-count=1`)
+
+    - name: Setup NDK using Magisk build script
+      run: |
+        cd Magisk
+        python3 build.py ndk
+
+    - name: Build magiskboot
+      run: |
+        cd Magisk
+        export ANDROID_NDK_HOME="$(pwd)/ndk"
         export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-        ./build.py native
+        python3 build.py magiskboot
+        cp ./app/src/main/jni/magiskboot/magiskboot ../magiskboot
 
-    - name: Verify magiskboot
-      working-directory: Magisk
+    - name: Extract ramdisk
       run: |
-        ls -la native/out/
-        file native/out/magiskboot
-        native/out/magiskboot --version
-
-    - name: Unpack initboot.img
-      run: |
-        mkdir -p unpacked
-        cd unpacked
-        ../Magisk/native/out/magiskboot unpack ../initboot.img
-        echo "Unpacked files:"
+        chmod +x magiskboot
+        ./magiskboot unpack initboot.img
         ls -la
 
     - name: Extract device tree
       run: |
-        mkdir -p device-tree
-        cd unpacked
-        if [ -f "ramdisk.cpio" ]; then
-          echo "Extracting from ramdisk.cpio"
-          ../Magisk/native/out/magiskboot cpio ramdisk.cpio extract "../device-tree"
-        elif [ -f "boot.img" ]; then
-          echo "Extracting from boot.img"
-          ../Magisk/native/out/magiskboot unpack boot.img
-          ../Magisk/native/out/magiskboot cpio ramdisk.cpio extract "../device-tree"
+        if [ -f ramdisk.cpio ]; then
+          echo "Found ramdisk.cpio"
+          mkdir ramdisk
+          cd ramdisk
+          cpio -i < ../ramdisk.cpio
+          find . -name "*.dtb" -exec cp {} ../device_tree.dtb \;
+          cd ..
+        elif [ -f boot.img ]; then
+          echo "Found boot.img"
+          mkdir ramdisk
+          cd ramdisk
+          cpio -i < ../boot.img
+          find . -name "*.dtb" -exec cp {} ../device_tree.dtb \;
+          cd ..
         else
-          echo "Error: No valid boot image found"
+          echo "No ramdisk found, checking for DTB in initboot.img"
+          ./magiskboot dtb initboot.img dtb.img
+          if [ -f dtb.img ]; then
+            cp dtb.img device_tree.dtb
+          else
+            echo "ERROR: No device tree found"
+            exit 1
+          fi
+        fi
+
+    - name: Verify device tree
+      run: |
+        if [ -f device_tree.dtb ]; then
+          file device_tree.dtb
+          dtc -I dtb -O dts device_tree.dtb | head -20
+        else
+          echo "ERROR: device_tree.dtb not found"
           exit 1
         fi
-        echo "Device tree contents:"
-        ls -la ../device-tree
 
-    - name: Repack initboot.img
+    - name: Repack initboot
       run: |
-        cd unpacked
-        ../Magisk/native/out/magiskboot repack ../initboot.img new-initboot.img
-        echo "Repacked image:"
-        file new-initboot.img
-        mv new-initboot.img ../
+        ./magiskboot repack initboot.img new_initboot.img
+        file new_initboot.img
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-device-tree
+        name: twp-device-files
         path: |
-          device-tree/
-          new-initboot.img
+          device_tree.dtb
+          new_initboot.img
         retention-days: 30
 
-    - name: Generate build info
+    - name: Generate build summary
       run: |
-        echo "## Build Information" >> $GITHUB_STEP_SUMMARY
-        echo "- **Source**: ${{ github.event.inputs.IMGURL }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Magiskboot**: Compiled from source" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build date**: $(date "+%Y-%m-%d %H:%M:%S")" >> $GITHUB_STEP_SUMMARY
-        echo "- **Screen**: 1272x2800 @ 560dpi" >> $GITHUB_STEP_SUMMARY
-        echo "- **Status**: ✅ Success" >> $GITHUB_STEP_SUMMARY
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Source URL**: ${{ github.event.inputs.IMGURL }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Device Tree**: $(file device_tree.dtb)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Repacked Image**: $(file new_initboot.img)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Date**: $(date "+%Y-%m-%d %H:%M:%S")" >> $GITHUB_STEP_SUMMARY
