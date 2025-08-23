@@ -10,70 +10,78 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 30  # 添加超时控制
+    
     steps:
       - name: Check Out
         uses: actions/checkout@v4
-
-      - name: Setup Android NDK
+        
+      - name: Setup Environment
+        run: |
+          sudo apt update
+          sudo apt install -y git wget unzip python3-pip
+          pip3 install twrpdtgen
+          
+      - name: Download NDK
         run: |
           wget https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
-          unzip android-ndk-r25b-linux.zip -d $HOME
-          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r25b" >> $GITHUB_ENV
-
+          unzip android-ndk-r25b-linux.zip
+          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r25b" >> $GITHUB_ENV
+          
+      - name: Cache NDK  # 添加缓存加速
+        uses: actions/cache@v4
+        with:
+          path: android-ndk-r25b
+          key: ndk-r25b-${{ runner.os }}
+          
       - name: Build Magiskboot from Source
         run: |
-          git clone --depth=1 https://github.com/topjohnwu/Magisk.git
+          git clone https://github.com/topjohnwu/Magisk.git
           cd Magisk
-          export ANDROID_NDK_HOME=$HOME/android-ndk-r25b
-          ./build.py native  # 修复：使用 native 参数
-
-      - name: Copy Magiskboot Binary
+          ./build.py native  # 修复：使用native参数而不是magiskboot
+          cp native/out/magiskboot ../
+          chmod +x ../magiskboot
+          
+      - name: Download and Extract initboot.img
         run: |
-          cp Magisk/native/out/magiskboot .  # 复制编译好的二进制文件
-          chmod +x magiskboot
-
-      - name: Download initboot.img
-        run: |
-          wget -O initboot.img "${{ github.event.inputs.IMGURL }}"
-
-      - name: Extract Ramdisk
-        run: |
+          wget ${{ github.event.inputs.IMGURL }} -O initboot.img
           ./magiskboot unpack initboot.img
-          mkdir ramdisk
-          cd ramdisk
-          cpio -idv < ../ramdisk.cpio
-
-      - name: Create DeviceTree
+          
+      - name: Generate TWRP Device Tree
         run: |
-          # 创建设备树文件
-          mkdir -p device_tree
-          cd ramdisk
-          find . -type f -name "*.fstab*" -exec cp --parents {} ../device_tree \;
-          find . -type f -name "*.rc" -exec cp --parents {} ../device_tree \;
-          cp -r fstab* ../device_tree/ 2>/dev/null || true
-          cp -r etc ../device_tree/ 2>/dev/null || true
-
-      - name: Create DeviceTree ZIP
-        run: |
-          cd device_tree
-          zip -r ../DeviceTree.zip .
-          cd ..
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: DeviceTree
-          path: DeviceTree.zip
-
+          mkdir -p twrp-device-tree
+          twrpdtgen initboot.img -o twrp-device-tree
+          find twrp-device-tree -name fstab.* -exec cp {} . \;
+          find twrp-device-tree -name init.*.rc -exec cp --parents {} twrp-device-tree \;
+          
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: android15-${{ github.run_id }}
+          files: |
+            twrp-device-tree.tar.gz
+            magiskboot
           body: |
             Auto-generated TWRP device tree for Android 15
             Source: ${{ github.event.inputs.IMGURL }}
             Magiskboot: Compiled from source
             Build date: $(date "+%Y-%m-%d %H:%M:%S")
-          files: DeviceTree.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Upload TWRP Device Tree  # 修复：升级到v4
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-device-tree
+          path: twrp-device-tree.tar.gz
+          retention-days: 30  # 添加保留期限
+          
+      - name: Upload Magiskboot Binary  # 新增：上传magiskboot
+        uses: actions/upload-artifact@v4
+        with:
+          name: magiskboot-binary
+          path: magiskboot
+          retention-days: 30
+          
+      - name: Check Disk Space  # 新增：健康检查
+        run: df -h
