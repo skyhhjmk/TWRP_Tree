@@ -16,9 +16,14 @@ jobs:
 
       - name: Setup Environment
         run: |
-          sudo apt update
+          sudo apt update -qq
           sudo apt install -y python3 cpio lz4 unzip wget
-          sudo ln -s /usr/bin/python3 /usr/bin/python
+          # 安全地创建 Python 符号链接
+          if [ ! -L /usr/bin/python ]; then
+            sudo ln -s /usr/bin/python3 /usr/bin/python
+          else
+            echo "Python symlink already exists, skipping creation"
+          fi
 
       - name: Install Magiskboot v29.0
         run: |
@@ -26,7 +31,7 @@ jobs:
           unzip -j Magisk-v29.0.apk lib/armeabi-v7a/magiskboot -d .
           chmod +x magiskboot
           sudo mv magiskboot /usr/local/bin/
-          magiskboot --version
+          magiskboot --version || echo "Magiskboot installed but version check failed"
 
       - name: Download init_boot.img
         run: |
@@ -35,21 +40,31 @@ jobs:
 
       - name: Extract Nested Ramdisk
         run: |
-          magiskboot unpack init_boot.img
+          magiskboot unpack init_boot.img || { echo "Magiskboot unpack failed"; exit 1; }
+          
+          if [ ! -f ramdisk.cpio ]; then
+            echo "Error: ramdisk.cpio not found after unpacking"
+            exit 1
+          fi
+          
           mkdir -p recovery/root
           cd recovery/root
           cpio -idm -v --no-absolute-filenames < ../../ramdisk.cpio 2>&1 | tee cpio.log
           
-          # Recursive CPIO extraction (for Android 15+)
+          # 递归解压嵌套CPIO
           find . -name "*.cpio" -exec sh -c '
             for f; do
               echo "Processing nested CPIO: $f"
               d=$(dirname "$f")
-              cd "$d" && mkdir -p tmp && mv "$(basename "$f")" tmp/
-              cd tmp && cpio -idm -v < * 2>&1 | tee nested.log
+              cd "$d"
+              mkdir -p tmp
+              mv "$(basename "$f")" tmp/
+              cd tmp
+              cpio -idm -v < * 2>&1 | tee nested.log
               chmod -R u+rwX .
               mv * ../
-              cd .. && rm -rf tmp
+              cd ..
+              rm -rf tmp
               cd -
             done
           ' sh {} +
@@ -57,13 +72,19 @@ jobs:
       - name: Generate Device Tree
         run: |
           pip3 install twrpdtgen
-          python3 -m twrpdtgen --root recovery/root -o dt
+          python3 -m twrpdtgen --root recovery/root -o dt || { echo "TWRPdtgen failed"; exit 1; }
           
-          # Auto-fill BoardConfig
+          # 自动填充BoardConfig
           DEVICE_DIR=$(find dt -maxdepth 1 -type d -name "*_*" | head -1)
+          if [ -z "$DEVICE_DIR" ]; then
+            echo "Error: Failed to find device directory"
+            exit 1
+          fi
+          
           echo "BOARD_RECOVERYIMAGE_PARTITION_SIZE := $(stat -c%s init_boot.img)" >> $DEVICE_DIR/BoardConfig.mk
           echo 'TW_THEME := portrait_hdpi' >> $DEVICE_DIR/BoardConfig.mk
           echo 'TW_EXCLUDE_DEFAULT_USB_INIT := true' >> $DEVICE_DIR/BoardConfig.mk
+          echo 'DEVICE_RESOLUTION := 1080x2400' >> $DEVICE_DIR/BoardConfig.mk
 
       - name: Zip Artifacts
         run: |
@@ -89,5 +110,6 @@ jobs:
             Auto-generated TWRP device tree for Android 15
             Source: ${{ github.event.inputs.IMG_URL }}
             Magiskboot: v29.0
+            Generated at: ${{ steps.vars.outputs.date }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
