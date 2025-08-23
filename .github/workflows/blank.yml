@@ -1,3 +1,5 @@
+
+```yaml
 name: Make TWRP Device (Android 15 Optimized)
 
 on:
@@ -29,6 +31,7 @@ jobs:
         run: |
           # 克隆官方仓库
           git clone --depth=1 https://github.com/topjohnwu/Magisk.git
+          cdwu/Magisk.git
           cd Magisk
           
           # 安装 NDK
@@ -39,9 +42,9 @@ jobs:
           # 编译 magiskboot（在仓库根目录运行）
           ./build.py ndk
           
-          # 安装 magiskboot
-          chmod +x out/magiskboot
-          sudo mv out/magiskboot /usr/local/bin/
+          # 安装 magiskboot - 新路径在 out/.magisk/boot/
+          chmod +x out/.magisk/boot/magiskboot
+          sudo mv out/.magisk/boot/magiskboot /usr/local/bin/
           cd ..
           magiskboot --version
 
@@ -56,6 +59,7 @@ jobs:
           
           if [ ! -f ramdisk.cpio ]; then
             echo "##[error]ramdisk.cpio not found"
+           disk.cpio not found"
             exit 1
           fi
           
@@ -84,7 +88,7 @@ jobs:
       - name: Generate Device Tree
         run: |
           pip3 install twrpdtgen
-          python3 -m twrpdtgen --root recovery/root -o dt || { echo "TWRPdtgen failed"; exit 1; }
+          python3 -m twrpdtgen --root recovery/root -o dt || { echo "TWRPdtgen failed"; exit WRPdtgen failed"; exit 1; }
           
           # 自动填充BoardConfig
           DEVICE_DIR=$(find dt -maxdepth 1 -type d -name "*_*" | head -1)
@@ -99,6 +103,7 @@ jobs:
           echo 'DEVICE_RESOLUTION := 1080x2400' >> $DEVICE_DIR/BoardConfig.mk
           echo 'TW_EXTRA_LANGUAGES := true' >> $DEVICE_DIR/BoardConfig.mk
           echo 'TW_INCLUDE_CRYPTO := true' >> $DEVICE_DIR/BoardConfig.mk
+          echo 'TW_USE_TOOLBOX := true' >> $DEVICE_DIR/BoardConfig.mk
 
       - name: Zip Artifacts
         run: |
