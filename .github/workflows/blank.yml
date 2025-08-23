@@ -29,18 +29,20 @@ jobs:
         run: |
           # 克隆官方仓库
           git clone --depth=1 https://github.com/topjohnwu/Magisk.git
-          cd Magisk/native
+          cd Magisk
           
           # 安装 NDK
           wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
           unzip -q android-ndk-r25c-linux.zip
           export ANDROID_NDK_HOME=$(pwd)/android-ndk-r25c
           
-          # 编译 magiskboot
-          ./build.py -v ndk
-          chmod +x magiskboot
-          sudo mv magiskboot /usr/local/bin/
-          cd ../..
+          # 编译 magiskboot（在仓库根目录运行）
+          ./build.py ndk
+          
+          # 安装 magiskboot
+          chmod +x out/magiskboot
+          sudo mv out/magiskboot /usr/local/bin/
+          cd ..
           magiskboot --version
 
       - name: Download init_boot.img
