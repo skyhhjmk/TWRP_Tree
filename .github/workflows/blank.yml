@@ -25,69 +25,78 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y git wget unzip python3 cpio
+        sudo apt-get install -y git wget unzip python3 python3-pip cpio
         pip3 install requests
 
     - name: Clone Magisk
       run: |
-        git clone https://github.com/topjohnwu/Magisk.git
+        git clone https://github.com/topjohnwu/Magisk.git --depth=1
         cd Magisk
         git submodule update --init --recursive
 
     - name: Install NDK
       working-directory: Magisk
-      run: python3 build.py ndk
+      run: |
+        python3 build.py ndk
+        echo "NDK installed successfully"
+        ls -la ndk/
 
-    - name: Build Magisk binaries
+    - name: Build Magisk (all components)
       working-directory: Magisk
-      run: python3 build.py native
+      run: |
+        export ANDROID_NDK_HOME=$PWD/ndk
+        echo "Building all Magisk components..."
+        python3 build.py all
+        echo "Build completed. Checking output..."
+        ls -la native/out/
+        echo "Checking for magiskboot..."
+        find . -name "magiskboot" -type f
 
     - name: Copy magiskboot
       run: |
-        cp Magisk/native/out/magiskboot .
-        chmod +x magiskboot
-        echo "magiskboot copied successfully"
-        file magiskboot
+        echo "Searching for magiskboot binary..."
+        find Magisk -name "magiskboot" -type f
+        MAGISKBOOT_PATH=$(find Magisk -name "magiskboot" -type f | head -n 1)
+        if [ -z "$MAGISKBOOT_PATH" ]; then
+          echo "ERROR: magiskboot not found!"
+          exit 1
+        fi
+        echo "Found magiskboot at: $MAGISKBOOT_PATH"
+        cp "$MAGISKBOOT_PATH" .
+        echo "Copied magiskboot to current directory"
+        ls -la magiskboot
 
     - name: Extract device tree
       run: |
-        echo "Extracting device tree from initboot.img"
+        echo "Extracting device tree from initboot.img..."
         ./magiskboot unpack initboot.img
-        if [ -f ramdisk.cpio ]; then
-          echo "Found ramdisk.cpio, extracting..."
-          mkdir ramdisk
-          cd ramdisk
-          cpio -i < ../ramdisk.cpio
-          if [ -f dtb ]; then
-            cp dtb ../devicetree.dtb
-            echo "Device tree extracted to devicetree.dtb"
-          else
-            echo "DTB not found in ramdisk"
-            exit 1
-          fi
-          cd ..
+        echo "Unpacked contents:"
+        ls -la
+        if [ -f "kernel_dtb" ]; then
+          echo "Found kernel_dtb, renaming to devicetree.dtb"
+          mv kernel_dtb devicetree.dtb
+        elif [ -f "dtb" ]; then
+          echo "Found dtb, renaming to devicetree.dtb"
+          mv dtb devicetree.dtb
         else
-          echo "ramdisk.cpio not found, trying direct DTB extraction"
-          ./magiskboot dtb initboot.img > devicetree.dtb
-          if [ -s devicetree.dtb ]; then
-            echo "Device tree extracted directly to devicetree.dtb"
-          else
-            echo "Failed to extract device tree"
-            exit 1
-          fi
+          echo "ERROR: No device tree file found!"
+          exit 1
         fi
+        echo "Device tree extracted successfully"
+        file devicetree.dtb
 
     - name: Repack initboot.img
       run: |
-        echo "Repacking initboot.img with extracted device tree"
+        echo "Repacking initboot.img with extracted device tree..."
         ./magiskboot repack initboot.img newinitboot.img
-        echo "Repacked image created: newinitboot.img"
+        echo "Repack completed"
+        ls -la newinitboot.img
         file newinitboot.img
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-device-files
+        name: twrp-device-tree
         path: |
           devicetree.dtb
           newinitboot.img
@@ -97,6 +106,8 @@ jobs:
       run: |
         echo "## Build Report" >> $GITHUB_STEP_SUMMARY
         echo "- **Build Date**: $(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
-        echo "- **Device Tree**: $(file devicetree.dtb)" >> $GITHUB_STEP_SUMMARY
-        echo "- **Repacked Image**: $(file newinitboot.img)" >> $GITHUB_STEP_SUMMARY
-        echo "- **Magiskboot Version**: $(./magiskboot -v)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Device Tree**: devicetree.dtb" >> $GITHUB_STEP_SUMMARY
+        echo "- **Repacked Image**: newinitboot.img" >> $GITHUB_STEP_SUMMARY
+        echo "- **Screen Resolution**: 1272x2800" >> $GITHUB_STEP_SUMMARY
+        echo "- **Display Density**: 560" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Status**: Succe
