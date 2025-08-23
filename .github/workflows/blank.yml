@@ -1,65 +1,67 @@
-name: Make TWRP Device
+name: Make TWRP Device (Android 15 Optimized)
 
 on:
   workflow_dispatch:
     inputs:
-      LIBRARY_NAME:
-        description: 'LIBRARY_NAME'
-        required: true
-        default: 'Twrp_Device_Genter'
       IMG_URL:
-        description: 'IMG_URL'
+        description: 'URL of init_boot.img (Android 15 REQUIRED)'
         required: true
-        default: 'https://github.com/momo54181/action_build_twrp_device_tree/raw/main/recovery.img'
 
 jobs:
   build:
-    if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-22.04
-
-    
     steps:
-    - name: Check Out
-      uses: actions/checkout@main
-      
-    - name: Prepare the environment
-      run: |
-        sudo apt update
-        sudo apt -y install python2 python3 python3-pip python3-pip cpio wget
-        
-    - name: Set variables
-      run: |
-        echo "name=date::$(date +%F)" >> $GITHUB_OUTPUT
-      id: var
-      
-    - name: Install TWRP generator 
-      run: |
-        pip3 install twrpdtgen
-        mkdir dt
-    
-    - name: Download boot or recovery img
-      run: |
-        rm *.bin || echo no bin XD
-        rm *.img || echo no img XD
-        echo download
-        wget ${{ github.event.inputs.IMG_URL }}
-        ls
-      
-    - name: Start build
-      run: |
-        python3 -m twrpdtgen -o dt/ *.img
+      - name: Check Out
+        uses: actions/checkout@v4
 
-    - name: ZIP device tree
-      run: |
-        zip -r DeviceTree.zip ./dt
+      - name: Setup Environment
+        run: |
+          sudo apt update
+          sudo apt install -y python3 cpio lz4 unzip wget
+          sudo ln -s /usr/bin/python3 /usr/bin/python
 
-    - name: Upload to Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          ./DeviceTree.zip
-        name: TWRP_Device_Tree-${{ github.run_id }}
-        tag_name: ${{ github.run_id }}
-        body: DeviceTree for twrp
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Magiskboot v29.0
+        run: |
+          wget -q https://github.com/topjohnwu/Magisk/releases/download/v29.0/Magisk-v29.0.apk
+          unzip -j Magisk-v29.0.apk lib/armeabi-v7a/magiskboot -d .
+          chmod +x magiskboot
+          sudo mv magiskboot /usr/local/bin/
+
+      - name: Download init_boot.img
+        run: |
+          wget -O init_boot.img "${{ github.event.inputs.IMG_URL }}"
+          file init_boot.img  # Verify file type
+
+      - name: Extract Nested Ramdisk
+        run: |
+          magiskboot unpack init_boot.img
+          mkdir -p recovery/root
+          cd recovery/root
+          cpio -idm -v --no-absolute-filenames < ../../ramdisk.cpio 2>&1 | tee cpio.log
+          
+          # 递归解压嵌套CPIO（Android 15需要）
+          find . -name "*.cpio" -exec sh -c '
+            for f; do
+              d=$(dirname "$f")
+              echo "Extracting nested CPIO: $f"
+              cd "$d" && mkdir tmp && mv "$(basename "$f")" tmp/
+              cd tmp && cpio -idm -v < * && mv * ../
+              cd .. && rmdir tmp
+            done
+          ' sh {} +
+
+      - name: Generate Device Tree
+        run: |
+          pip3 install twrpdtgen
+          python3 -m twrpdtgen --root recovery/root -o dt
+          
+          # 自动填充BoardConfig
+          DEVICE=$(find dt -maxdepth 1 -type d -name "*_*" | head -1)
+          echo "BOARD_RECOVERYIMAGE_PARTITION_SIZE := $(stat -c%s init_boot.img)" >> $DEVICE/BoardConfig.mk
+          echo 'TW_THEME := portrait_hdpi' >> $DEVICE/BoardConfig.mk
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: TWRP-DeviceTree-Android15
+          path: dt/
