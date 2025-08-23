@@ -3,8 +3,8 @@ name: Make TWRP Device (Android 15 Optimized)
 on:
   workflow_dispatch:
     inputs:
-      IMG_URL:
-        description: 'URL of init_boot.img (Android 15 REQUIRED)'
+      IMGURL:
+        description: 'URL of initboot.img (Android 15 REQUIRED)'
         required: true
 
 jobs:
@@ -27,83 +27,41 @@ jobs:
 
       - name: Build Magiskboot from Source
         run: |
-          # 克隆官方仓库
+          # 安装 NDK（Magisk 编译依赖）
+          wget https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
+          unzip -q android-ndk-r25b-linux.zip
+          export ANDROID_NDK_HOME=$(pwd)/android-ndk-r25b
+          
+          # 克隆官方仓库（修正命令）
           git clone --depth=1 https://github.com/topjohnwu/Magisk.git
-          cdwu/Magisk.git
           cd Magisk
           
-          # 安装 NDK
-          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-          unzip -q android-ndk-r25c-linux.zip
-          export ANDROID_NDK_HOME=$(pwd)/android-ndk-r25c
+          # 编译 magiskboot
+          ./build.py magiskboot
           
-          # 编译 magiskboot（在仓库根目录运行）
-          ./build.py ndk
-          
-          # 安装 magiskboot - 新路径在 out/.magisk/boot/
-          chmod +x out/.magisk/boot/magiskboot
-          sudo mv out/.magisk/boot/magiskboot /usr/local/bin/
-          cd ..
-          magiskboot --version
+          # 将编译好的 magiskboot 移动到系统路径
+          sudo mv out/magiskboot /usr/local/bin/
+          magiskboot --version  # 验证安装
 
-      - name: Download init_boot.img
+      - name: Download and Extract Boot Image
         run: |
-          wget -O init_boot.img "${{ github.event.inputs.IMG_URL }}"
-          file init_boot.img
+          wget -O initboot.img "${{ github.event.inputs.IMGURL }}"
+          magiskboot unpack initboot.img
+          mkdir -p dt
+          cp -r ramdisk/* dt/
 
-      - name: Extract and Process Ramdisk
+      - name: Process Nested CPIO Archives
         run: |
-          magiskboot unpack init_boot.img || { echo "Magiskboot unpack failed"; ls; exit 1; }
-          
-          if [ ! -f ramdisk.cpio ]; then
-            echo "##[error]ramdisk.cpio not found"
-           disk.cpio not found"
-            exit 1
-          fi
-          
-          mkdir -p recovery/root
-          cd recovery/root
-          cpio -idm -v --no-absolute-filenames < ../../ramdisk.cpio 2>&1 | tee cpio.log
-          
-          # 递归解压嵌套CPIO
-          find . -name "*.cpio" -exec sh -c '
-            for f; do
-              echo "Processing nested CPIO: $f"
-              d=$(dirname "$f")
-              cd "$d"
-              mkdir -p tmp
-              mv "$(basename "$f")" tmp/
-              cd tmp
-              cpio -idm -v < * 2>&1 | tee nested.log
-              chmod -R u+rwX .
-              mv * ../
-              cd ..
-              rm -rf tmp
-              cd -
-            done
-          ' sh {} +
+          find dt -name "*.cpio" -exec sh -c '
+            dir=$(dirname "$1")
+            base=$(basename "$1" .cpio)
+            mkdir -p "$dir/$base"
+            cd "$dir/$base"
+            cpio -i < "../$base.cpio"
+            rm "../$base.cpio"
+          ' sh {} \;
 
-      - name: Generate Device Tree
-        run: |
-          pip3 install twrpdtgen
-          python3 -m twrpdtgen --root recovery/root -o dt || { echo "TWRPdtgen failed"; exit WRPdtgen failed"; exit 1; }
-          
-          # 自动填充BoardConfig
-          DEVICE_DIR=$(find dt -maxdepth 1 -type d -name "*_*" | head -1)
-          if [ -z "$DEVICE_DIR" ]; then
-            echo "##[error]Device directory not found"
-            exit 1
-          fi
-          
-          echo "BOARD_RECOVERYIMAGE_PARTITION_SIZE := $(stat -c%s init_boot.img)" >> $DEVICE_DIR/BoardConfig.mk
-          echo 'TW_THEME := portrait_hdpi' >> $DEVICE_DIR/BoardConfig.mk
-          echo 'TW_EXCLUDE_DEFAULT_USB_INIT := true' >> $DEVICE_DIR/BoardConfig.mk
-          echo 'DEVICE_RESOLUTION := 1080x2400' >> $DEVICE_DIR/BoardConfig.mk
-          echo 'TW_EXTRA_LANGUAGES := true' >> $DEVICE_DIR/BoardConfig.mk
-          echo 'TW_INCLUDE_CRYPTO := true' >> $DEVICE_DIR/BoardConfig.mk
-          echo 'TW_USE_TOOLBOX := true' >> $DEVICE_DIR/BoardConfig.mk
-
-      - name: Zip Artifacts
+      - name: Upload Artifacts
         run: |
           zip -r DeviceTree.zip dt/
           ls -lh DeviceTree.zip
@@ -125,8 +83,8 @@ jobs:
           tag_name: android15-${{ github.run_id }}
           body: |
             Auto-generated TWRP device tree for Android 15
-            Source: ${{ github.event.inputs.IMG_URL }}
+            Source: ${{ github.event.inputs.IMGURL }}
             Magiskboot: Compiled from source
-            Build date: $(date +"%Y-%m-%d %H:%M:%S")
+            Build date: $(date "+%Y-%m-%d %H:%M:%S")
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
