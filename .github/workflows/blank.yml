@@ -9,69 +9,110 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     
     steps:
-    - name: Check Out
+    - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup Environment
+    - name: Download initboot.img
       run: |
-        sudo apt update
-        sudo apt install -y git wget unzip python3 python3-pip openjdk-17-jdk
-        pip3 install pyyaml requests
-
-    - name: Clone Magisk
-      run: git clone https://github.com/topjohnwu/Magisk.git
+        curl -L -o initboot.img "${{ github.event.inputs.IMGURL }}"
+        echo "Downloaded initboot.img:"
+        file initboot.img
 
     - name: Cache NDK
       id: cache-ndk
       uses: actions/cache@v4
       with:
-        path: |
-          Magisk/android-ndk-r25b
-          ~/.cache/ndk
+        path: android-ndk-r25b
         key: ndk-r25b-${{ runner.os }}-${{ hashFiles('Magisk/build.py') }}
-        restore-keys: |
-          ndk-r25b-${{ runner.os }}-
-          ndk-r25b-
+        restore-keys: ndk-r25b-${{ runner.os }}-
 
     - name: Install NDK
       if: steps.cache-ndk.outputs.cache-hit != 'true'
-      working-directory: Magisk
-      run: ./build.py ndk
-
-    - name: Set Environment Variables
       run: |
-        echo "ANDROID_NDK_HOME=$PWD/Magisk/android-ndk-r25b" >> $GITHUB_ENV
-        echo "NDK=$PWD/Magisk/android-ndk-r25b" >> $GITHUB_ENV
+        curl -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
+        unzip -q ndk.zip
+        rm ndk.zip
+
+    - name: Clone Magisk
+      run: git clone https://github.com/topjohnwu/Magisk.git --recurse-submodules
+
+    - name: Initialize submodules
+      working-directory: Magisk
+      run: git submodule update --init --recursive
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
 
     - name: Build Magiskboot
       working-directory: Magisk
-      run: ./build.py native
-
-    - name: Download Boot Image
-      run: wget -O initboot.img "${{ github.event.inputs.IMGURL }}"
-
-    - name: Unpack Boot Image
+      env:
+        ANDROID_NDK_HOME: ${{ github.workspace }}/android-ndk-r25b
+        NDK: ${{ github.workspace }}/android-ndk-r25b
       run: |
-        mkdir boot
-        cd boot
-        ../Magisk/magiskboot unpack ../initboot.img
+        export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+        ./build.py native
 
-    - name: Create Device Tree
+    - name: Verify magiskboot
+      working-directory: Magisk
       run: |
-        mkdir -p device/twrp
-        cd device/twrp
-        cp ../../boot/init_boot.img init_boot.img
-        echo '# TWRP Device Tree' > README.md
-        echo 'Source: ${{ github.event.inputs.IMGURL }}' >> README.md
-        echo 'Build date: $(date "+%Y-%m-%d %H:%M:%S")' >> README.md
+        ls -la native/out/
+        file native/out/magiskboot
+        native/out/magiskboot --version
 
-    - name: Upload Artifact
+    - name: Unpack initboot.img
+      run: |
+        mkdir -p unpacked
+        cd unpacked
+        ../Magisk/native/out/magiskboot unpack ../initboot.img
+        echo "Unpacked files:"
+        ls -la
+
+    - name: Extract device tree
+      run: |
+        mkdir -p device-tree
+        cd unpacked
+        if [ -f "ramdisk.cpio" ]; then
+          echo "Extracting from ramdisk.cpio"
+          ../Magisk/native/out/magiskboot cpio ramdisk.cpio extract "../device-tree"
+        elif [ -f "boot.img" ]; then
+          echo "Extracting from boot.img"
+          ../Magisk/native/out/magiskboot unpack boot.img
+          ../Magisk/native/out/magiskboot cpio ramdisk.cpio extract "../device-tree"
+        else
+          echo "Error: No valid boot image found"
+          exit 1
+        fi
+        echo "Device tree contents:"
+        ls -la ../device-tree
+
+    - name: Repack initboot.img
+      run: |
+        cd unpacked
+        ../Magisk/native/out/magiskboot repack ../initboot.img new-initboot.img
+        echo "Repacked image:"
+        file new-initboot.img
+        mv new-initboot.img ../
+
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: twrp-device-tree
-        path: device/
+        path: |
+          device-tree/
+          new-initboot.img
         retention-days: 30
+
+    - name: Generate build info
+      run: |
+        echo "## Build Information" >> $GITHUB_STEP_SUMMARY
+        echo "- **Source**: ${{ github.event.inputs.IMGURL }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Magiskboot**: Compiled from source" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build date**: $(date "+%Y-%m-%d %H:%M:%S")" >> $GITHUB_STEP_SUMMARY
+        echo "- **Screen**: 1272x2800 @ 560dpi" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: ✅ Success" >> $GITHUB_STEP_SUMMARY
