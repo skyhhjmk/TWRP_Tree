@@ -17,33 +17,43 @@ jobs:
       - name: Setup Environment
         run: |
           sudo apt update -qq
-          sudo apt install -y python3 cpio lz4 unzip wget git
+          sudo apt install -y python3 cpio lz4 unzip wget git build-essential zlib1g-dev
           # 安全创建 Python 符号链接
           if [ ! -L /usr/bin/python ]; then
             sudo ln -s /usr/bin/python3 /usr/bin/python
           else
-            echo "Python symlink already exists, skipping creation"
+            echo "Python symlink exists"
           fi
 
-      - name: Install Magiskboot v29.0 (Correct Method)
+      - name: Build Magiskboot from Source
         run: |
-          # 直接从 Magisk 仓库获取正确的 magiskboot
-          wget -q https://raw.githubusercontent.com/topjohnwu/magisk-files/25.0/stubs/armeabi-v7a/magiskboot
+          # 克隆官方仓库
+          git clone --depth=1 https://github.com/topjohnwu/Magisk.git
+          cd Magisk/native
+          
+          # 安装 NDK
+          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+          unzip -q android-ndk-r25c-linux.zip
+          export ANDROID_NDK_HOME=$(pwd)/android-ndk-r25c
+          
+          # 编译 magiskboot
+          ./build.py -v ndk
           chmod +x magiskboot
           sudo mv magiskboot /usr/local/bin/
-          magiskboot --version || echo "Magiskboot installed"
+          cd ../..
+          magiskboot --version
 
       - name: Download init_boot.img
         run: |
           wget -O init_boot.img "${{ github.event.inputs.IMG_URL }}"
-          file init_boot.img  # Verify file type
+          file init_boot.img
 
       - name: Extract and Process Ramdisk
         run: |
-          magiskboot unpack init_boot.img || { echo "Magiskboot unpack failed"; exit 1; }
+          magiskboot unpack init_boot.img || { echo "Magiskboot unpack failed"; ls; exit 1; }
           
           if [ ! -f ramdisk.cpio ]; then
-            echo "Error: ramdisk.cpio not found after unpacking"
+            echo "##[error]ramdisk.cpio not found"
             exit 1
           fi
           
@@ -77,7 +87,7 @@ jobs:
           # 自动填充BoardConfig
           DEVICE_DIR=$(find dt -maxdepth 1 -type d -name "*_*" | head -1)
           if [ -z "$DEVICE_DIR" ]; then
-            echo "Error: Failed to find device directory"
+            echo "##[error]Device directory not found"
             exit 1
           fi
           
@@ -111,7 +121,7 @@ jobs:
           body: |
             Auto-generated TWRP device tree for Android 15
             Source: ${{ github.event.inputs.IMG_URL }}
-            Magiskboot: v29.0
-            Generated at: $(date)
+            Magiskboot: Compiled from source
+            Build date: $(date +"%Y-%m-%d %H:%M:%S")
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
