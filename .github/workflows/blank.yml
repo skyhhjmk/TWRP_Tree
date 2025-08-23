@@ -17,28 +17,28 @@ jobs:
       - name: Setup Environment
         run: |
           sudo apt update -qq
-          sudo apt install -y python3 cpio lz4 unzip wget
-          # 安全地创建 Python 符号链接
+          sudo apt install -y python3 cpio lz4 unzip wget git
+          # 安全创建 Python 符号链接
           if [ ! -L /usr/bin/python ]; then
             sudo ln -s /usr/bin/python3 /usr/bin/python
           else
             echo "Python symlink already exists, skipping creation"
           fi
 
-      - name: Install Magiskboot v29.0
+      - name: Install Magiskboot v29.0 (Correct Method)
         run: |
-          wget -q https://github.com/topjohnwu/Magisk/releases/download/v29.0/Magisk-v29.0.apk
-          unzip -j Magisk-v29.0.apk lib/armeabi-v7a/magiskboot -d .
+          # 直接从 Magisk 仓库获取正确的 magiskboot
+          wget -q https://raw.githubusercontent.com/topjohnwu/magisk-files/25.0/stubs/armeabi-v7a/magiskboot
           chmod +x magiskboot
           sudo mv magiskboot /usr/local/bin/
-          magiskboot --version || echo "Magiskboot installed but version check failed"
+          magiskboot --version || echo "Magiskboot installed"
 
       - name: Download init_boot.img
         run: |
           wget -O init_boot.img "${{ github.event.inputs.IMG_URL }}"
           file init_boot.img  # Verify file type
 
-      - name: Extract Nested Ramdisk
+      - name: Extract and Process Ramdisk
         run: |
           magiskboot unpack init_boot.img || { echo "Magiskboot unpack failed"; exit 1; }
           
@@ -85,6 +85,8 @@ jobs:
           echo 'TW_THEME := portrait_hdpi' >> $DEVICE_DIR/BoardConfig.mk
           echo 'TW_EXCLUDE_DEFAULT_USB_INIT := true' >> $DEVICE_DIR/BoardConfig.mk
           echo 'DEVICE_RESOLUTION := 1080x2400' >> $DEVICE_DIR/BoardConfig.mk
+          echo 'TW_EXTRA_LANGUAGES := true' >> $DEVICE_DIR/BoardConfig.mk
+          echo 'TW_INCLUDE_CRYPTO := true' >> $DEVICE_DIR/BoardConfig.mk
 
       - name: Zip Artifacts
         run: |
@@ -110,6 +112,6 @@ jobs:
             Auto-generated TWRP device tree for Android 15
             Source: ${{ github.event.inputs.IMG_URL }}
             Magiskboot: v29.0
-            Generated at: ${{ steps.vars.outputs.date }}
+            Generated at: $(date)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
